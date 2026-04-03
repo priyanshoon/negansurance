@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Iterable, Sequence
 
 from .graph import InteractionGraph
@@ -21,10 +21,12 @@ def _calculate_base_payout(context: EvaluationContext) -> float:
 class ClaimDecisioningFraudEngine:
     """Runs rule, ML, and graph layers to reach a claim decision."""
 
-    rules: Sequence[Rule] = DEFAULT_RULES
-    projector: FeatureProjector = FeatureProjector()
-    model: LogisticRiskModel = LogisticRiskModel(DEFAULT_COEFFICIENTS)
-    graph: InteractionGraph = InteractionGraph()
+    rules: Sequence[Rule] = field(default_factory=lambda: DEFAULT_RULES)
+    projector: FeatureProjector = field(default_factory=FeatureProjector)
+    model: LogisticRiskModel = field(
+        default_factory=lambda: LogisticRiskModel(DEFAULT_COEFFICIENTS)
+    )
+    graph: InteractionGraph = field(default_factory=InteractionGraph)
     review_threshold: float = 0.45
     block_threshold: float = 0.8
 

@@ -3,9 +3,25 @@
 from __future__ import annotations
 
 import json
+import sys
 import uuid
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Dict, TYPE_CHECKING, List
+
+
+def _resolve_repo_root() -> Path:
+    current = Path(__file__).resolve()
+    for candidate in current.parents:
+        if (candidate / ".git").exists() or (candidate / "pyproject.toml").exists():
+            return candidate
+    return current.parents[-1]
+
+
+REPO_ROOT = _resolve_repo_root()
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
 
 from services.claim_fraud_engine import (
     ClaimDecisioningFraudEngine,
@@ -52,7 +68,9 @@ class ClaimDecisioningService:
         breakdown = self._build_breakdown(engine_result.breakdown)
         denial_reasons: List[str] = []
         if status == ClaimDecisionStatus.denied:
-            denial_reasons = breakdown.explanations or ["Auto-denied by decision engine"]
+            denial_reasons = breakdown.explanations or [
+                "Auto-denied by decision engine"
+            ]
 
         claim_summary = (
             self._build_claim_summary(payload, filed_at)
@@ -86,7 +104,9 @@ class ClaimDecisioningService:
         payload = {
             "user": json.loads(decision.user_info.json()),
             "claim": json.loads(decision.claim_summary.json()),
-            "breakdown": json.loads(decision.breakdown.json()) if decision.breakdown else None,
+            "breakdown": json.loads(decision.breakdown.json())
+            if decision.breakdown
+            else None,
             "recommended_action": decision.recommended_action,
         }
         await self._database.execute(
@@ -226,7 +246,9 @@ class ClaimDecisioningService:
         return [
             claim.claim_id
             for claim in self._claims.values()
-            if claim.user_info and claim.user_info.partner_id == partner_id and claim.decided_at >= horizon
+            if claim.user_info
+            and claim.user_info.partner_id == partner_id
+            and claim.decided_at >= horizon
         ]
 
     def _historical_claim_count(self, partner_id: str) -> int:

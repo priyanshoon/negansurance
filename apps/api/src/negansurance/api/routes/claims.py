@@ -39,7 +39,9 @@ async def get_claim(
 ) -> ClaimDecision:
     decision = claim_service.get(claim_id)
     if not decision:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Claim not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Claim not found"
+        )
     return decision
 
 
@@ -53,10 +55,12 @@ async def queue_payout(
 ) -> PayoutInstruction:
     decision = claim_service.get(claim_id)
     if not decision:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Claim not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Claim not found"
+        )
     if decision.payout_amount <= 0:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Claim has no payable amount",
         )
-    return payout_service.enqueue(decision, payload.destination_handle)
+    return await payout_service.enqueue(decision, payload.destination_handle)
