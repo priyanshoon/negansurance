@@ -6,7 +6,7 @@ export type PartnerPlatform = (typeof PARTNER_PLATFORMS)[number];
 type RegistrationState = {
   // Step 1 (light)
   fullName: string;
-  profilePhotoUri: string | null;
+  // profilePhotoUri: string | null;
   photoConfirmationChecked: boolean;
 
   // Step 1 (dark)
@@ -23,6 +23,7 @@ type RegistrationState = {
   avgWeeklyIncome: string;
 
   // Step 2
+  verificationMethod: "email" | "phone";
   countryCode: string; // e.g. +91
   phoneNationalNumber: string; // digits only
   otpDigits: string[]; // length 6
@@ -50,20 +51,21 @@ const RegistrationContext =
 
 const initialState: RegistrationState = {
   fullName: "",
-  profilePhotoUri: null,
+  // profilePhotoUri: null,
   photoConfirmationChecked: false,
 
   firstName: "",
   lastName: "",
   emailAddress: "",
 
-  partnerPlatform: "Swiggy",
+  partnerPlatform: "Zomato",
   operatingCity: "",
   partnerPlatformUserId: "",
   platformIdVerified: false,
   avgDailyDutyHours: "",
   avgWeeklyIncome: "",
 
+  verificationMethod: "email",
   countryCode: "+91",
   phoneNationalNumber: "",
   otpDigits: Array.from({ length: 6 }, () => ""),

@@ -2,36 +2,74 @@ import { useSignUp } from "@clerk/expo";
 import { MaterialIcons } from "@expo/vector-icons";
 import { type Href, useRouter } from "expo-router";
 import React from "react";
-import { Pressable, Text, TextInput, View } from "react-native";
+import { Pressable, Text, TextInput, useColorScheme, View } from "react-native";
 
+import { TermsAndConditionsModal } from "@/components/TermsAndConditionsModal";
 import { useRegistration } from "@/context/registration-context";
+import { useServerUser } from "@/context/server-user-context";
 
-function buildUnsafeMetadata(
+import { registerUser, type UserRegisterRequest } from "@/lib/serverApi";
+
+const LIGHT_PRIMARY = "#753eb5";
+const DARK_PRIMARY = "#c799ff";
+const LIGHT_ON_PRIMARY = "#faefff";
+const LIGHT_PLACEHOLDER = "#896d95";
+
+function toInt(value: string) {
+  const n = Number.parseInt(value.trim(), 10);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function buildRegisterRequest(
   state: ReturnType<typeof useRegistration>["state"],
-) {
+  phoneE164: string,
+): UserRegisterRequest {
+  const fullNameFromParts = `${state.firstName} ${state.lastName}`.trim();
+  const fullName = (state.fullName || fullNameFromParts).trim();
   return {
-    registration: {
-      fullName: state.fullName,
-      operatingCity: state.operatingCity,
-      partnerPlatform: state.partnerPlatform,
-      partnerPlatformUserId: state.partnerPlatformUserId,
-      avgDailyDutyHours: state.avgDailyDutyHours,
-      avgWeeklyIncome: state.avgWeeklyIncome,
-      firstName: state.firstName,
-      lastName: state.lastName,
-      emailAddress: state.emailAddress,
-      phone: {
-        countryCode: state.countryCode,
-        nationalNumber: state.phoneNationalNumber,
-      },
-    },
+    full_name: fullName,
+    email: state.emailAddress.trim(),
+    phone_number: phoneE164,
+    operating_city: state.operatingCity.trim(),
+    average_duty_hours_per_week: toInt(state.avgDailyDutyHours),
+    average_weekly_earnings: toInt(state.avgWeeklyIncome),
+    partner_name: state.partnerPlatform,
+    partner_platform_id: state.partnerPlatformUserId.trim(),
+    is_kyc_verified: true,
   };
 }
 
 export default function AccountSetupPage() {
-  const { signUp, errors, fetchStatus } = useSignUp();
+  const signUpState = useSignUp();
+  const { signUp, errors, fetchStatus } = signUpState;
   const router = useRouter();
   const { state, setState, phoneE164 } = useRegistration();
+  const { setUser } = useServerUser();
+  const scheme = useColorScheme();
+  const isDark = scheme === "dark";
+  const primary = isDark ? DARK_PRIMARY : LIGHT_PRIMARY;
+  const placeholderTextColor = isDark ? undefined : LIGHT_PLACEHOLDER;
+
+  const [termsOpen, setTermsOpen] = React.useState(false);
+
+  React.useEffect(() => {
+    const load = async () => {
+      if (!signUp) return;
+    };
+
+    load();
+  }, [signUp]);
+
+  const getErrorMessage = (e: unknown, fallback: string) => {
+    const anyErr = e as any;
+    const fromClerk =
+      anyErr?.errors?.[0]?.longMessage ??
+      anyErr?.errors?.[0]?.message ??
+      anyErr?.errors?.[0]?.shortMessage;
+    const fromMessage =
+      typeof anyErr?.message === "string" ? anyErr.message : null;
+    return (fromClerk || fromMessage || fallback) as string;
+  };
 
   const [busy, setBusy] = React.useState(false);
   const [formError, setFormError] = React.useState<string | null>(null);
@@ -42,17 +80,6 @@ export default function AccountSetupPage() {
 
   const fieldErrors = (errors as any)?.fields ?? {};
 
-  const navigateToHome = (decorateUrl: (url: string) => string) => {
-    const url = decorateUrl("/home");
-    if (url.startsWith("http")) {
-      if (typeof window !== "undefined") {
-        window.location.href = url;
-      }
-    } else {
-      router.push(url as Href);
-    }
-  };
-
   const canSubmit =
     state.password.length >= 8 &&
     state.password === state.confirmPassword &&
@@ -60,6 +87,11 @@ export default function AccountSetupPage() {
 
   const handleFinish = async () => {
     setFormError(null);
+
+    if (!state.phoneNationalNumber.trim()) {
+      setFormError("Mobile number is required.");
+      return;
+    }
 
     if (state.password !== state.confirmPassword) {
       setFormError("Passwords do not match.");
@@ -73,51 +105,67 @@ export default function AccountSetupPage() {
 
     setBusy(true);
     try {
-      const { error: updateError } = await signUp.update({
-        unsafeMetadata: buildUnsafeMetadata(state),
-        legalAccepted: true,
-      });
-      if (updateError) {
-        throw updateError;
-      }
-
-      const { error: passwordError } = await signUp.password({
+      // First update legal acceptance (kept separate for older SDKs), then set password.
+      await signUp.update({ legalAccepted: true });
+      const { error } = await signUp.password({
         password: state.password,
-        phoneNumber: signUp.phoneNumber ?? phoneE164,
-        emailAddress: state.emailAddress || undefined,
-        firstName: state.firstName || undefined,
-        lastName: state.lastName || undefined,
       });
-      if (passwordError) {
-        throw passwordError;
+
+      if (error) {
+        throw new Error("Failed to set password: " + error.message);
       }
 
-      if (signUp.status === "complete") {
-        const { error: finalizeError } = await signUp.finalize({
+      const anySignUp = signUp as any;
+      // console.log({
+      //   status: anySignUp?.status,
+      //   requiredFields: anySignUp?.requiredFields,
+      //   missingFields: anySignUp?.missingFields,
+      //   // verifications: anySignUp?.verifications,
+      // });
+      //console.log("after any sign");
+      //console.log(anySignUp?.status);
+
+      if (anySignUp?.status === "abandoned") {
+        throw new Error("Signup session expired. Please restart.");
+      }
+      //console.log("just before complete");
+      
+      if (anySignUp?.status === "complete") {
+        // Navigate only after Clerk + server registration succeed.
+        //console.log("Inside complete");
+        
+        const registerReq = buildRegisterRequest(state, phoneE164);
+        const createdUser = await registerUser(registerReq);
+        if (!createdUser || !createdUser.id) {
+          setFormError("Failed to create user on server.");
+          throw new Error("Failed to create user on server.");
+        }
+        setUser(createdUser);
+
+        await signUp.finalize({
+          // Redirect the user to the home page after signing up
           navigate: ({ session, decorateUrl }) => {
+            // Handle session tasks
+            // See https://clerk.com/docs/guides/development/custom-flows/authentication/session-tasks
             if (session?.currentTask) {
-              console.log(session.currentTask);
+              console.log(session?.currentTask);
               return;
             }
 
-            navigateToHome(decorateUrl);
+            // If no session tasks, navigate the signed-in user to the home page
+            const url = decorateUrl("/home");
+            if (url.startsWith("http")) {
+              window.location.href = url;
+            } else {
+              router.replace(url as Href);
+            }
           },
         });
-
-        if (finalizeError) {
-          throw finalizeError;
-        }
-      } else {
-        setFormError(
-          "Sign-up is not complete yet. Please review your details.",
-        );
       }
     } catch (e: any) {
-      const message =
-        typeof e?.message === "string"
-          ? e.message
-          : "Failed to complete sign-up.";
-      setFormError(message);
+      console.log("Error in completing sign up: ", e);
+
+      setFormError(getErrorMessage(e, "Failed to complete sign-up."));
     } finally {
       setBusy(false);
     }
@@ -130,7 +178,7 @@ export default function AccountSetupPage() {
           onPress={() => router.back()}
           className="h-10 w-10 items-center justify-center rounded-full"
         >
-          <MaterialIcons name="arrow-back" size={22} color="#753eb5" />
+          <MaterialIcons name="arrow-back" size={22} color={primary} />
         </Pressable>
         <Text className="font-headline text-xl tracking-tight text-primary">
           Account Setup
@@ -167,7 +215,7 @@ export default function AccountSetupPage() {
             onChangeText={(v) => setState((s) => ({ ...s, password: v }))}
             className="font-body text-on-surface"
             placeholder="Password (min 8 chars)"
-            placeholderTextColor="#896d95"
+            placeholderTextColor={placeholderTextColor}
             secureTextEntry
           />
         </View>
@@ -185,18 +233,19 @@ export default function AccountSetupPage() {
             }
             className="font-body text-on-surface"
             placeholder="Confirm password"
-            placeholderTextColor="#896d95"
+            placeholderTextColor={placeholderTextColor}
             secureTextEntry
           />
         </View>
 
-        <Pressable
-          onPress={() =>
-            setState((s) => ({ ...s, acceptedTerms: !s.acceptedTerms }))
-          }
-          className="mt-2 flex-row items-start gap-4 rounded-xl p-4"
-        >
-          <View
+        <View className="mt-2 flex-row items-start gap-4 rounded-xl p-4">
+          <Pressable
+            onPress={() =>
+              setState((s) => ({ ...s, acceptedTerms: !s.acceptedTerms }))
+            }
+            accessibilityRole="checkbox"
+            accessibilityLabel="Accept terms and conditions"
+            accessibilityState={{ checked: state.acceptedTerms }}
             className={`mt-1 h-6 w-6 items-center justify-center rounded-md border-2 ${
               state.acceptedTerms
                 ? "border-primary bg-primary"
@@ -206,11 +255,24 @@ export default function AccountSetupPage() {
             {state.acceptedTerms ? (
               <MaterialIcons name="check" size={16} color="#ffffff" />
             ) : null}
-          </View>
+          </Pressable>
+
           <Text className="flex-1 font-body text-sm leading-relaxed text-on-surface-variant">
-            I agree to the Terms of Service and Privacy Policy.
+            I agree to the{" "}
+            <Text
+              onPress={() => setTermsOpen(true)}
+              suppressHighlighting
+              className={`font-body ${
+                state.acceptedTerms
+                  ? "font-bold text-primary underline"
+                  : "text-primary underline"
+              }`}
+            >
+              Terms &amp; Conditions
+            </Text>{" "}
+            and Privacy Policy.
           </Text>
-        </Pressable>
+        </View>
 
         {formError ? (
           <Text className="text-sm text-error">{formError}</Text>
@@ -223,7 +285,7 @@ export default function AccountSetupPage() {
             !canSubmit || busy || fetchStatus === "fetching" ? "opacity-50" : ""
           }`}
         >
-          <MaterialIcons name="check-circle" size={20} color="#faefff" />
+          <MaterialIcons name="check-circle" size={20} color={LIGHT_ON_PRIMARY} />
           <Text className="font-headline text-lg text-on-primary">
             Create Account
           </Text>
@@ -231,6 +293,15 @@ export default function AccountSetupPage() {
       </View>
 
       <View className="mt-10" nativeID="clerk-captcha" />
+
+      <TermsAndConditionsModal
+        visible={termsOpen}
+        onClose={() => setTermsOpen(false)}
+        onAccept={() => {
+          setState((s) => ({ ...s, acceptedTerms: true }));
+          setTermsOpen(false);
+        }}
+      />
     </View>
   );
 }
